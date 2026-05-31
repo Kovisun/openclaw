@@ -1,28 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
 import {
   resolveEffectiveHomeDir,
   resolveHomeRelativePath,
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
+import { resolveTimerTimeoutMs } from "./shared/number-coercion.js";
 export { escapeRegExp } from "./shared/regexp.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
-}
-
-/**
- * Check if a file or directory exists at the given path.
- */
-export async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.promises.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function clampNumber(value: number, min: number, max: number): number {
@@ -68,7 +58,7 @@ export function normalizeE164(number: string): string {
 }
 
 export function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0)));
 }
 
 function isHighSurrogate(codeUnit: number): boolean {
@@ -206,3 +196,9 @@ export function displayString(input: string): string {
 
 // Configuration root; can be overridden via OPENCLAW_STATE_DIR.
 export const CONFIG_DIR = resolveConfigDir();
+/**
+ * Check if a file or directory exists at the given path.
+ */
+export async function pathExists(targetPath: string): Promise<boolean> {
+  return await fsSafePathExists(targetPath);
+}

@@ -1,4 +1,13 @@
-import { loadConfig } from "../../config/config.js";
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  ErrorCodes,
+  errorShape,
+  validatePushTestParams,
+  validateWebPushSubscribeParams,
+  validateWebPushTestParams,
+  validateWebPushUnsubscribeParams,
+  validateWebPushVapidPublicKeyParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -14,22 +23,12 @@ import {
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "../../infra/push-web.js";
-import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
-import {
-  ErrorCodes,
-  errorShape,
-  validatePushTestParams,
-  validateWebPushSubscribeParams,
-  validateWebPushTestParams,
-  validateWebPushUnsubscribeParams,
-  validateWebPushVapidPublicKeyParams,
-} from "../protocol/index.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const pushHandlers: GatewayRequestHandlers = {
-  "push.test": async ({ params, respond }) => {
+  "push.test": async ({ params, respond, context }) => {
     if (!validatePushTestParams(params)) {
       respondInvalidParams({
         respond,
@@ -83,7 +82,11 @@ export const pushHandlers: GatewayRequestHandlers = {
               });
             })()
           : await (async () => {
-              const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
+              const relay = resolveApnsRelayConfigFromEnv(
+                process.env,
+                context.getRuntimeConfig().gateway,
+                { registrationRelayOrigin: registration.relayOrigin },
+              );
               if (!relay.ok) {
                 respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));
                 return null;

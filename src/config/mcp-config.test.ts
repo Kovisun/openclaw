@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
 import {
   listConfiguredMcpServers,
   setConfiguredMcpServer,
@@ -107,7 +107,7 @@ describe("config mcp config", () => {
       if (!reloaded.ok) {
         throw new Error("expected MCP config to reload");
       }
-      expect(reloaded.mcpServers).toEqual({});
+      expect(reloaded.mcpServers).toStrictEqual({});
     });
   });
 
@@ -151,6 +151,60 @@ describe("config mcp config", () => {
           "X-Retry": 1,
           "X-Debug": true,
         },
+      });
+    });
+  });
+
+  it("canonicalizes CLI-native HTTP type aliases when saving MCP config", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "remote",
+        server: {
+          type: "http",
+          url: "https://example.com/mcp",
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.remote).toEqual({
+        url: "https://example.com/mcp",
+        transport: "streamable-http",
+      });
+    });
+  });
+
+  it("canonicalizes common MCP operator aliases when saving config", async () => {
+    await withMcpConfigHome({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "remote",
+        server: {
+          url: "https://example.com/mcp",
+          connect_timeout: 5,
+          supports_parallel_tool_calls: true,
+          ssl_verify: false,
+          client_cert: "/tmp/client.crt",
+          client_key: "/tmp/client.key",
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.remote).toEqual({
+        url: "https://example.com/mcp",
+        connectTimeout: 5,
+        supportsParallelToolCalls: true,
+        sslVerify: false,
+        clientCert: "/tmp/client.crt",
+        clientKey: "/tmp/client.key",
       });
     });
   });

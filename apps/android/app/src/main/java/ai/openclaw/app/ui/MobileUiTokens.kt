@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Brush
@@ -9,11 +10,6 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.R
-
-// ---------------------------------------------------------------------------
-// MobileColors – semantic color tokens with light + dark variants
-// ---------------------------------------------------------------------------
 
 internal data class MobileColors(
   val surface: Color,
@@ -108,9 +104,6 @@ internal object MobileColorsAccessor {
     @Composable get() = LocalMobileColors.current
 }
 
-// ---------------------------------------------------------------------------
-// Backward-compatible top-level accessors (composable getters)
-// ---------------------------------------------------------------------------
 // These allow existing call sites to keep using `mobileSurface`, `mobileText`, etc.
 // without converting every file at once. Each resolves to the themed value.
 
@@ -148,10 +141,6 @@ internal val mobileBackgroundGradient: Brush
       ),
     )
   }
-
-// ---------------------------------------------------------------------------
-// Typography tokens (theme-independent)
-// ---------------------------------------------------------------------------
 
 internal val mobileFontFamily =
   FontFamily(

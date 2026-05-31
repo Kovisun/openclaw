@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,10 +16,6 @@ import type {
   PluginHookMessageReceivedEvent,
   PluginHookMessageSentEvent,
 } from "../plugins/hook-message.types.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type {
   MessagePreprocessedHookContext,
   MessageReceivedHookContext,
@@ -80,6 +80,10 @@ export type CanonicalSentMessageHookContext = {
   groupId?: string;
 };
 
+function readNonBlankString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
 export function deriveInboundMessageHookContext(
   ctx: FinalizedMsgContext,
   overrides?: {
@@ -89,13 +93,10 @@ export function deriveInboundMessageHookContext(
 ): CanonicalInboundMessageHookContext {
   const content =
     overrides?.content ??
-    (typeof ctx.BodyForCommands === "string"
-      ? ctx.BodyForCommands
-      : typeof ctx.RawBody === "string"
-        ? ctx.RawBody
-        : typeof ctx.Body === "string"
-          ? ctx.Body
-          : "");
+    readNonBlankString(ctx.BodyForCommands) ??
+    readNonBlankString(ctx.RawBody) ??
+    readNonBlankString(ctx.Body) ??
+    "";
   const channelId = normalizeLowercaseStringOrEmpty(
     ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
   );
@@ -380,6 +381,12 @@ export function toPluginMessageReceivedEvent(
       senderName: canonical.senderName,
       senderUsername: canonical.senderUsername,
       senderE164: canonical.senderE164,
+      mediaPath: canonical.mediaPath,
+      mediaUrl: canonical.mediaUrl,
+      mediaType: canonical.mediaType,
+      mediaPaths: canonical.mediaPaths,
+      mediaUrls: canonical.mediaUrls,
+      mediaTypes: canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       topicName: canonical.topicName,

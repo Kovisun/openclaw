@@ -10,10 +10,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import { asRecord } from "./record-shared.js";
 
-export type GatewayAttachment = {
+type GatewayAttachment = {
   type: string;
   mimeType: string;
   content: string;

@@ -218,6 +218,13 @@ export type TelegramAccountConfig = {
   trustedLocalFileRoots?: string[];
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
+  /**
+   * When enabled (default), each sent reply appends a "delivery-mirror" assistant
+   * message to the session transcript. This can cause duplicate entries in the
+   * WebUI when the same content is mirrored back into the session.
+   * Set to `false` to suppress the mirror and keep only the original AI response.
+   */
+  transcriptMirrorEnabled?: boolean;
 };
 
 export type TelegramTopicConfig = {

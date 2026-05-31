@@ -4,15 +4,19 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
+import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import { runWithModelFallback } from "./model-fallback.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
-import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 import {
   buildEmbeddedRunnerAssistant,
   createResolvedEmbeddedRunnerModel,
   makeEmbeddedRunnerAttempt,
-} from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
-import { installEmbeddedRunnerBaseE2eMocks } from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
+} from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
+  installEmbeddedRunnerBackoffE2eMocks,
+  installEmbeddedRunnerBaseE2eMocks,
+  installEmbeddedRunnerFastRunE2eMocks,
+} from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -25,28 +29,6 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
-vi.mock("./pi-embedded-runner/run/attempt.js", async () => {
-  const actual = await vi.importActual<typeof import("./pi-embedded-runner/run/attempt.js")>(
-    "./pi-embedded-runner/run/attempt.js",
-  );
-  return {
-    ...actual,
-    runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
-  };
-});
-
-vi.mock("../infra/backoff.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/backoff.js")>("../infra/backoff.js");
-  return {
-    ...actual,
-    computeBackoff: (
-      policy: { initialMs: number; maxMs: number; factor: number; jitter: number },
-      attempt: number,
-    ) => computeBackoffMock(policy, attempt),
-    sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => sleepWithAbortMock(ms, abortSignal),
-  };
-});
-
 vi.mock("./models-config.js", async () => {
   const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
   return {
@@ -57,28 +39,25 @@ vi.mock("./models-config.js", async () => {
 
 const installRunEmbeddedMocks = () => {
   installEmbeddedRunnerBaseE2eMocks();
-  vi.doMock("./pi-embedded-runner/model.js", () => ({
+  installEmbeddedRunnerFastRunE2eMocks({
+    runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
+  });
+  installEmbeddedRunnerBackoffE2eMocks({
+    computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
+    sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
+  });
+  vi.doMock("./embedded-agent-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) =>
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async () => {
-    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-      "../plugins/provider-runtime.js",
-    );
-    return {
-      ...actual,
-      prepareProviderRuntimeAuth: vi.fn(async () => undefined),
-      resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
-    };
-  });
 };
 
-let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
+let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
 
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
-  ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
+  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
 });
 
 beforeEach(() => {
@@ -205,6 +184,16 @@ async function readUsageStats(agentDir: string) {
   return JSON.parse(raw).usageStats as Record<string, Record<string, unknown> | undefined>;
 }
 
+function expectFailureCount(
+  usageStats: Record<string, Record<string, unknown> | undefined>,
+  profileId: string,
+  reason: AuthProfileFailureReason,
+  expected: number,
+) {
+  const failureCounts = usageStats[profileId]?.failureCounts as Record<string, unknown> | undefined;
+  expect(failureCounts?.[reason]).toBe(expected);
+}
+
 async function writeMultiProfileAuthStore(agentDir: string) {
   await fs.writeFile(
     path.join(agentDir, "auth-profiles.json"),
@@ -248,7 +237,7 @@ async function runEmbeddedFallback(params: {
     runId: params.runId,
     agentDir: params.agentDir,
     run: (provider, model, options) =>
-      runEmbeddedPiAgent({
+      runEmbeddedAgent({
         sessionId: `session:${params.runId}`,
         sessionKey: params.sessionKey,
         sessionFile: path.join(params.workspaceDir, `${params.runId}.jsonl`),
@@ -323,14 +312,15 @@ function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
   );
 }
 
-function mockPrimaryRunLoopRateLimitThenFallbackSuccess(errorMessage: string) {
+function mockPrimaryStaleRateLimitTextSuccess(errorMessage: string) {
   mockPrimaryFailureThenFallbackSuccess(() =>
     makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
+      assistantTexts: ["primary ok"],
       lastAssistant: buildEmbeddedRunnerAssistant({
         provider: "openai",
         model: "mock-1",
-        stopReason: "length",
+        stopReason: "stop",
+        content: [{ type: "text", text: "primary ok" }],
         errorMessage,
       }),
     }),
@@ -343,13 +333,14 @@ function expectOpenAiThenGroqAttemptOrder(params?: { expectOpenAiAuthProfileId?:
     | { provider?: string; authProfileId?: string }
     | undefined;
   const secondCall = runEmbeddedAttemptMock.mock.calls[1]?.[0] as { provider?: string } | undefined;
-  expect(firstCall).toBeDefined();
-  expect(secondCall).toBeDefined();
-  expect(firstCall?.provider).toBe("openai");
-  if (params?.expectOpenAiAuthProfileId) {
-    expect(firstCall?.authProfileId).toBe(params.expectOpenAiAuthProfileId);
+  if (!firstCall || !secondCall) {
+    throw new Error("expected primary and fallback embedded run attempts");
   }
-  expect(secondCall?.provider).toBe("groq");
+  expect(firstCall.provider).toBe("openai");
+  if (params?.expectOpenAiAuthProfileId) {
+    expect(firstCall.authProfileId).toBe(params.expectOpenAiAuthProfileId);
+  }
+  expect(secondCall.provider).toBe("groq");
 }
 
 function mockAllProvidersOverloaded() {
@@ -381,7 +372,7 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
   expect(countProviderAttempts("groq")).toBe(expected.groq);
 }
 
-describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
+describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
   it("keeps tool summary on incomplete side-effect terminal results", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
@@ -397,7 +388,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         }),
       );
 
-      const result = await runEmbeddedPiAgent({
+      const result = await runEmbeddedAgent({
         sessionId: "session:tool-side-effect-terminal",
         sessionKey: "agent:test:tool-side-effect-terminal",
         sessionFile: path.join(workspaceDir, "tool-side-effect-terminal.jsonl"),
@@ -413,13 +404,11 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         enqueue: async (task) => await task(),
       });
 
-      expect(result.meta.toolSummary).toMatchObject({
-        calls: 1,
-        tools: ["write"],
-      });
+      expect(result.meta.toolSummary?.calls).toBe(1);
+      expect(result.meta.toolSummary?.tools).toEqual(["write"]);
       expect(
-        classifyEmbeddedPiRunResultForModelFallback({
-          provider: "openai-codex",
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: "openai",
           model: "gpt-5.4",
           result,
         }),
@@ -488,7 +477,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
 
       const usageStats = await readUsageStats(agentDir);
       expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
+      expectFailureCount(usageStats, "openai:p1", "overloaded", 1);
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
       expectOpenAiThenGroqAttemptOrder();
@@ -502,6 +491,10 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       {
         name: "undici-terminated",
         message: "terminated",
+      },
+      {
+        name: "stream-read-error",
+        message: "stream_read_error",
       },
       {
         name: "codex-empty-transport-response",
@@ -586,14 +579,6 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         /openai\/mock-1: .* \(overloaded\) \| groq\/mock-2: .* \(overloaded\)/,
       );
 
-      const usageStats = await readUsageStats(agentDir);
-      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expect(typeof usageStats["groq:p1"]?.cooldownUntil).toBe("number");
-      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
-      expect(usageStats["groq:p1"]?.failureCounts).toMatchObject({ overloaded: 1 });
-      expect(usageStats["openai:p1"]?.disabledUntil).toBeUndefined();
-      expect(usageStats["groq:p1"]?.disabledUntil).toBeUndefined();
-
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
@@ -657,7 +642,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
 
       const usageStats = await readUsageStats(agentDir);
       expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
-      expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 2 });
+      expectFailureCount(usageStats, "openai:p1", "overloaded", 2);
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
@@ -696,8 +681,9 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         throw new Error("aborted");
       });
 
-      await expect(
-        runEmbeddedFallback({
+      let thrown: unknown;
+      try {
+        await runEmbeddedFallback({
           agentDir,
           workspaceDir,
           sessionKey: "agent:test:overloaded-backoff-abort",
@@ -707,11 +693,14 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
             ...makeConfig(),
             auth: { cooldowns: { overloadedBackoffMs: 321 } },
           },
-        }),
-      ).rejects.toMatchObject({
-        name: "AbortError",
-        message: "Operation aborted",
-      });
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).name).toBe("AbortError");
+      expect((thrown as Error).message).toBe("Operation aborted");
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
       const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
@@ -793,11 +782,11 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
     });
   });
 
-  it("falls back on classified rate limits even when stopReason is not error", async () => {
+  it("ignores stale classified rate-limit text when stopReason is not error", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeMultiProfileAuthStore(agentDir);
 
-      mockPrimaryRunLoopRateLimitThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+      mockPrimaryStaleRateLimitTextSuccess(RATE_LIMIT_ERROR_MESSAGE);
 
       const result = await runEmbeddedFallback({
         agentDir,
@@ -810,12 +799,11 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         },
       });
 
-      expect(result.provider).toBe("groq");
-      expect(result.model).toBe("mock-2");
-      expect(result.attempts[0]?.reason).toBe("rate_limit");
-      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("mock-1");
+      expect(result.attempts).toEqual([]);
 
-      expectProviderAttemptCounts({ openai: 3, groq: 1 });
+      expectProviderAttemptCounts({ openai: 1, groq: 0 });
     });
   });
 

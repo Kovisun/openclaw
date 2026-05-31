@@ -1,4 +1,8 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/param-readers";
 import {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   browserAct,
@@ -6,24 +10,28 @@ import {
   browserSnapshot,
   browserTabs,
   getBrowserProfileCapabilities,
+  getRuntimeConfig,
   imageResultFromFile,
   jsonResult,
-  loadConfig,
   normalizeOptionalString,
   readStringValue,
   resolveBrowserConfig,
   resolveProfile,
+  resolveRuntimeImageSanitization,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./browser/constants.js";
+import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
+} from "./browser/constants.js";
 
 const browserToolActionDeps = {
   browserAct,
   browserConsoleMessages,
   browserSnapshot,
   browserTabs,
+  getRuntimeConfig,
   imageResultFromFile,
-  loadConfig,
 };
 
 const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
@@ -32,9 +40,15 @@ type BrowserActRequest = Parameters<typeof browserAct>[1];
 type BrowserActRequestWithTimeout = BrowserActRequest & { timeoutMs?: number };
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return readPositiveIntegerParam({ value }, "value", {
+    message: "timeoutMs must be a positive integer.",
+  });
+}
+
+function normalizeNonNegativeDurationMs(value: unknown): number | undefined {
+  return readNonNegativeIntegerParam({ value }, "value", {
+    message: "timeMs must be a non-negative integer.",
+  });
 }
 
 function supportsBrowserActTimeout(request: BrowserActRequest): boolean {
@@ -70,7 +84,7 @@ function existingSessionRejectsActTimeout(request: BrowserActRequest): boolean {
 }
 
 function usesExistingSessionProfile(profileName: string | undefined): boolean {
-  const cfg = browserToolActionDeps.loadConfig();
+  const cfg = browserToolActionDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const profile = resolveProfile(resolved, profileName ?? resolved.defaultProfile);
   return profile ? getBrowserProfileCapabilities(profile).usesChromeMcp : false;
@@ -91,7 +105,7 @@ function withConfiguredActTimeout(
     return request;
   }
 
-  const cfg = browserToolActionDeps.loadConfig();
+  const cfg = browserToolActionDeps.getRuntimeConfig();
   const configuredTimeout =
     normalizePositiveTimeoutMs(cfg.browser?.actionTimeoutMs) ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS;
   return { ...typedRequest, timeoutMs: configuredTimeout } as BrowserActRequest;
@@ -106,7 +120,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
     candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
   }
   if (request.kind === "wait") {
-    const waitDuration = normalizePositiveTimeoutMs(request.timeMs);
+    const waitDuration = normalizeNonNegativeDurationMs(request.timeMs);
     if (waitDuration !== undefined) {
       candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
     }
@@ -114,7 +128,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
   return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -122,7 +136,7 @@ export const __testing = {
       browserSnapshot: typeof browserSnapshot;
       browserTabs: typeof browserTabs;
       imageResultFromFile: typeof imageResultFromFile;
-      loadConfig: typeof loadConfig;
+      getRuntimeConfig: typeof getRuntimeConfig;
     }> | null,
   ) {
     browserToolActionDeps.browserAct = overrides?.browserAct ?? browserAct;
@@ -132,7 +146,7 @@ export const __testing = {
     browserToolActionDeps.browserTabs = overrides?.browserTabs ?? browserTabs;
     browserToolActionDeps.imageResultFromFile =
       overrides?.imageResultFromFile ?? imageResultFromFile;
-    browserToolActionDeps.loadConfig = overrides?.loadConfig ?? loadConfig;
+    browserToolActionDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
   },
 };
 
@@ -250,7 +264,7 @@ function isChromeStaleTargetError(profile: string | undefined, err: unknown): bo
     const msg = String(err);
     return msg.includes("404:") && msg.includes("tab not found");
   }
-  const cfg = browserToolActionDeps.loadConfig();
+  const cfg = browserToolActionDeps.getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const browserProfile = resolveProfile(resolved, profile);
   if (!browserProfile || !getBrowserProfileCapabilities(browserProfile).usesChromeMcp) {
@@ -326,7 +340,7 @@ export async function executeSnapshotAction(params: {
   onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
-  const snapshotDefaults = browserToolActionDeps.loadConfig().browser?.snapshotDefaults;
+  const snapshotDefaults = browserToolActionDeps.getRuntimeConfig().browser?.snapshotDefaults;
   const format: "ai" | "aria" | undefined =
     input.snapshotFormat === "ai" ? "ai" : input.snapshotFormat === "aria" ? "aria" : undefined;
   const formatExplicit = format !== undefined;
@@ -342,16 +356,18 @@ export async function executeSnapshotAction(params: {
     input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
   const hasMaxChars = Object.hasOwn(input, "maxChars");
   const targetId = normalizeOptionalString(input.targetId);
-  const limit =
-    typeof input.limit === "number" && Number.isFinite(input.limit) ? input.limit : undefined;
-  const maxChars =
-    typeof input.maxChars === "number" && Number.isFinite(input.maxChars) && input.maxChars > 0
-      ? Math.floor(input.maxChars)
-      : undefined;
+  const limit = readPositiveIntegerParam(input, "limit", {
+    message: "limit must be a positive integer.",
+  });
+  const maxCharsRaw = readNonNegativeIntegerParam(input, "maxChars", {
+    message: "maxChars must be a non-negative integer.",
+  });
+  const maxChars = maxCharsRaw !== undefined && maxCharsRaw > 0 ? maxCharsRaw : undefined;
   const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
   const compact = typeof input.compact === "boolean" ? input.compact : undefined;
-  const depth =
-    typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
+  const depth = readNonNegativeIntegerParam(input, "depth", {
+    message: "depth must be a non-negative integer.",
+  });
   const selector = normalizeOptionalString(input.selector);
   const frame = normalizeOptionalString(input.frame);
   const resolvedMaxChars =
@@ -364,6 +380,10 @@ export async function executeSnapshotAction(params: {
       : hasMaxChars
         ? maxChars
         : undefined;
+  const snapshotTimeoutMs =
+    readPositiveIntegerParam(input, "timeoutMs", {
+      message: "timeoutMs must be a positive integer.",
+    }) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
   const snapshotQuery = {
     ...(format ? { format } : {}),
     targetId,
@@ -378,6 +398,7 @@ export async function executeSnapshotAction(params: {
     labels,
     urls,
     mode,
+    timeoutMs: snapshotTimeoutMs,
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
@@ -387,6 +408,7 @@ export async function executeSnapshotAction(params: {
           path: "/snapshot",
           profile,
           query,
+          timeoutMs: snapshotTimeoutMs,
         })) as Awaited<ReturnType<typeof browserSnapshot>>)
       : await browserToolActionDeps.browserSnapshot(baseUrl, {
           ...query,
@@ -404,6 +426,31 @@ export async function executeSnapshotAction(params: {
   }
   params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
   if (snapshot.format === "ai") {
+    const dialogStateFields = {
+      ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
+      ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
+    };
+    if (snapshot.blockedByDialog) {
+      const wrapped = wrapBrowserExternalJson({
+        kind: "snapshot",
+        payload: {
+          format: snapshot.format,
+          targetId: snapshot.targetId,
+          url: snapshot.url,
+          ...dialogStateFields,
+        },
+      });
+      return {
+        content: [{ type: "text" as const, text: wrapped.wrappedText }],
+        details: {
+          ...wrapped.safeDetails,
+          format: snapshot.format,
+          targetId: snapshot.targetId,
+          url: snapshot.url,
+          ...dialogStateFields,
+        },
+      };
+    }
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
       source: "browser",
@@ -423,6 +470,7 @@ export async function executeSnapshotAction(params: {
       imagePath: snapshot.imagePath,
       imageType: snapshot.imageType,
       refsFallback,
+      ...dialogStateFields,
       externalContent: {
         untrusted: true,
         source: "browser",
@@ -437,6 +485,7 @@ export async function executeSnapshotAction(params: {
         path: snapshot.imagePath,
         extraText: wrappedSnapshot,
         details: safeDetails,
+        imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
     return {
@@ -457,6 +506,8 @@ export async function executeSnapshotAction(params: {
         targetId: snapshot.targetId,
         url: snapshot.url,
         nodeCount: snapshot.nodes.length,
+        ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
+        ...(snapshot.browserState !== undefined ? { browserState: snapshot.browserState } : {}),
         externalContent: {
           untrusted: true,
           source: "browser",
@@ -574,3 +625,4 @@ export async function executeActAction(params: {
     throw err;
   }
 }
+export { testing as __testing };

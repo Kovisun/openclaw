@@ -49,14 +49,15 @@ async function ensureSandboxWorkspaceLayout(params: {
       sandboxWorkspaceDir,
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
+      params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
     );
     if (cfg.workspaceAccess !== "rw") {
       try {
-        const [{ getRemoteSkillEligibility }, { canExecRequestNode }, { syncSkillsToWorkspace }] =
+        const [{ syncSkillsToWorkspace }, { getRemoteSkillEligibility }, { canExecRequestNode }] =
           await Promise.all([
-            import("../../infra/skills-remote.js"),
+            import("../../skills/loading/workspace.js"),
+            import("../../skills/runtime/remote.js"),
             import("../exec-defaults.js"),
-            import("../skills.js"),
           ]);
         await syncSkillsToWorkspace({
           sourceWorkspaceDir: agentWorkspaceDir,
@@ -184,7 +185,8 @@ export async function resolveSandboxContext(params: {
     ? await (async () => {
         // Sandbox browser bridge server runs on a loopback TCP port; always wire up
         // the same auth that loopback browser clients will send (token/password).
-        const cfgForAuth = params.config ?? (await import("../../config/config.js")).loadConfig();
+        const cfgForAuth =
+          params.config ?? (await import("../../config/config.js")).getRuntimeConfig();
         let browserAuth = resolveBrowserControlAuth(cfgForAuth);
         try {
           const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });

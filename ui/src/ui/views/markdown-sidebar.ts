@@ -18,7 +18,7 @@ export type MarkdownSidebarProps = {
   error: string | null;
   onClose: () => void;
   onViewRawText: () => void;
-  canvasHostUrl?: string | null;
+  canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
 };
@@ -49,14 +49,18 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
         ${props.error
           ? html`
               <div class="callout danger">${props.error}</div>
-              <button
-                @click=${props.onViewRawText}
-                class="btn"
-                type="button"
-                style="margin-top: 12px;"
-              >
-                View Raw Text
-              </button>
+              ${content?.rawText?.trim()
+                ? html`
+                    <button
+                      @click=${props.onViewRawText}
+                      class="btn"
+                      type="button"
+                      style="margin-top: 12px;"
+                    >
+                      View Raw Text
+                    </button>
+                  `
+                : nothing}
             `
           : content
             ? content.kind === "canvas"
@@ -72,7 +76,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                         )}
                         src=${resolveCanvasIframeUrl(
                           content.entryUrl,
-                          props.canvasHostUrl,
+                          props.canvasPluginSurfaceUrl,
                           props.allowExternalEmbedUrls ?? false,
                         ) ?? nothing}
                         style=${content.preferredHeight

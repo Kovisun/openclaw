@@ -47,7 +47,7 @@ describe("resolveEffectiveModelFallbacks", () => {
       fallbacks: ["google/gemini-2.0-flash"],
     };
 
-    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual([]);
+    expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toStrictEqual([]);
   });
 });
 
@@ -87,11 +87,11 @@ describe("resolveConfiguredCronModelSuggestions", () => {
   });
 
   it("returns empty array for invalid or missing config shape", () => {
-    expect(resolveConfiguredCronModelSuggestions(null)).toEqual([]);
-    expect(resolveConfiguredCronModelSuggestions({})).toEqual([]);
-    expect(resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } })).toEqual(
-      [],
-    );
+    expect(resolveConfiguredCronModelSuggestions(null)).toStrictEqual([]);
+    expect(resolveConfiguredCronModelSuggestions({})).toStrictEqual([]);
+    expect(
+      resolveConfiguredCronModelSuggestions({ agents: { defaults: { model: "" } } }),
+    ).toStrictEqual([]);
   });
 });
 
@@ -202,8 +202,9 @@ describe("buildAgentContext", () => {
         workspace: "/tmp/agent-workspace",
         model: {
           primary: "openai/gpt-5.5",
-          fallbacks: ["openai-codex/gpt-5.2-codex"],
+          fallbacks: ["openai/gpt-5.2-codex"],
         },
+        agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
       },
       null,
       null,
@@ -213,6 +214,7 @@ describe("buildAgentContext", () => {
 
     expect(context.workspace).toBe("/tmp/agent-workspace");
     expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+    expect(context.runtime).toBe("claude-cli (fallback none)");
     expect(context.isDefault).toBe(true);
   });
 
@@ -225,7 +227,7 @@ describe("buildAgentContext", () => {
             workspace: "/tmp/default-workspace",
             model: {
               primary: "openai/gpt-5.5",
-              fallbacks: ["openai-codex/gpt-5.2-codex"],
+              fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
           list: [{ id: "main" }],
@@ -238,5 +240,27 @@ describe("buildAgentContext", () => {
 
     expect(context.workspace).toBe("/tmp/default-workspace");
     expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+  });
+
+  it("prefers per-agent configured identity over runtime global identity in agent panels", () => {
+    const context = buildAgentContext(
+      {
+        id: "fs-daying",
+        name: "File-system agent",
+        identity: { name: "大颖", emoji: "⚙️" },
+      },
+      null,
+      null,
+      "main",
+      {
+        agentId: "fs-daying",
+        name: "AI大管家",
+        avatar: "M",
+        emoji: "🤖",
+      },
+    );
+
+    expect(context.identityName).toBe("大颖");
+    expect(context.identityAvatar).toBe("⚙️");
   });
 });

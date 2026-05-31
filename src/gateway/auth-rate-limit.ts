@@ -16,6 +16,7 @@
  *   {@link createAuthRateLimiter} and pass it where needed.
  */
 
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
 // ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ export const AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN = "device-token";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 
-export interface RateLimitEntry {
+interface RateLimitEntry {
   /** Timestamps (epoch ms) of recent failed attempts inside the window. */
   attempts: number[];
   /** If set, requests from this IP are blocked until this epoch-ms instant. */
@@ -96,12 +97,22 @@ export function normalizeRateLimitClientIp(ip: string | undefined): string {
   return resolveClientIp({ remoteAddr: ip }) ?? "unknown";
 }
 
+function resolvePruneIntervalMs(value: number | undefined): number {
+  if (value === undefined) {
+    return PRUNE_INTERVAL_MS;
+  }
+  if (Number.isFinite(value) && value <= 0) {
+    return 0;
+  }
+  return resolveTimerTimeoutMs(value, PRUNE_INTERVAL_MS);
+}
+
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
   const maxAttempts = config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const windowMs = config?.windowMs ?? DEFAULT_WINDOW_MS;
-  const lockoutMs = config?.lockoutMs ?? DEFAULT_LOCKOUT_MS;
+  const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS, 0);
+  const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 0);
   const exemptLoopback = config?.exemptLoopback ?? true;
-  const pruneIntervalMs = config?.pruneIntervalMs ?? PRUNE_INTERVAL_MS;
+  const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
 
   const entries = new Map<string, RateLimitEntry>();
 
