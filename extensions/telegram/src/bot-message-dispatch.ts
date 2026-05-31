@@ -1328,17 +1328,18 @@ export const dispatchTelegramMessage = async ({
     replyQuotePosition,
     replyQuoteEntities,
     replyQuoteByMessageId,
-    transcriptMirror: sessionKey
-      ? async (payload: TelegramTranscriptMirrorPayload) => {
-          await mirrorTelegramAssistantReplyToTranscript({
-            cfg,
-            route,
-            sessionKey,
-            loadFreshSessionStore,
-            payload,
-          });
-        }
-      : undefined,
+    transcriptMirror:
+      sessionKey && telegramCfg.transcriptMirrorEnabled !== false
+        ? async (payload: TelegramTranscriptMirrorPayload) => {
+            await mirrorTelegramAssistantReplyToTranscript({
+              cfg,
+              route,
+              sessionKey,
+              loadFreshSessionStore,
+              payload,
+            });
+          }
+        : undefined,
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
